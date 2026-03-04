@@ -2,7 +2,6 @@
 
 #include "../../Algorithm.hpp"
 #include "../../../space/Space.hpp"
-#include "../../../target/WindowTarget.hpp"
 #include "../../../LayoutManager.hpp"
 
 #include "../../../../config/ConfigValue.hpp"
@@ -10,6 +9,7 @@
 #include "../../../../helpers/Monitor.hpp"
 #include "../../../../Compositor.hpp"
 
+#include <hyprutils/math/Vector2D.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
 
 using namespace Layout;
@@ -557,29 +557,30 @@ void CDwindleAlgorithm::moveTargetInDirection(SP<ITarget> t, Math::eDirection di
     if (!PNODE || !t->window())
         return;
 
-    const auto FOCAL_POINT = focalPointForDir(t, dir);
-
+    auto       PMONINDIR     = g_pCompositor->getMonitorInDirection(m_parent->space()->workspace()->m_monitor.lock(), dir);
+    const auto FOCAL_POINT   = focalPointForDir(t, dir);
     const auto PMONITORFOCAL = g_pCompositor->getMonitorFromVector(FOCAL_POINT.value_or(t->position().middle()));
 
-    if (PMONITORFOCAL != m_parent->space()->workspace()->m_monitor && !*PMONITORFALLBACK)
-        return; // noop
+    const auto PCURRENTMONITOR    = m_parent->space()->workspace()->m_monitor.lock();
+    const bool shouldCrossMonitor = (PMONINDIR && PMONINDIR != PCURRENTMONITOR) || (!PMONINDIR && PMONITORFOCAL != PCURRENTMONITOR);
+
+    // use PMONINDIR if available, otherwise fallback to PMONITORFOCAL
+    const auto PTARGETMONITOR = PMONINDIR ? PMONINDIR : PMONITORFOCAL;
 
     t->window()->setAnimationsToMove();
 
-    removeTarget(t);
-
-    if (PMONITORFOCAL != m_parent->space()->workspace()->m_monitor) {
-        // move with a focal point
-
-        if (PMONITORFOCAL->m_activeWorkspace)
-            t->assignToSpace(PMONITORFOCAL->m_activeWorkspace->m_space, FOCAL_POINT);
-
-        return;
+    if (shouldCrossMonitor) {
+        if (!*PMONITORFALLBACK)
+            return; // noop
+        removeTarget(t);
+        Vector2D transformedFocalPoint = FOCAL_POINT.value_or(t->position().middle());
+        if (PTARGETMONITOR && PTARGETMONITOR->m_activeWorkspace)
+            t->assignToSpace(PTARGETMONITOR->m_activeWorkspace->m_space, transformedFocalPoint);
+    } else {
+        removeTarget(t);
+        movedTarget(t, FOCAL_POINT);
     }
 
-    movedTarget(t, FOCAL_POINT);
-
-    // restore focus to the previous position
     if (silent) {
         const auto PNODETOFOCUS = getClosestNode(originalPos);
         if (PNODETOFOCUS && PNODETOFOCUS->pTarget)
